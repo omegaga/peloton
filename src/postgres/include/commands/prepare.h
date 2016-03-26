@@ -45,6 +45,7 @@ extern void ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into,
 					const char *queryString, ParamListInfo params);
 
 /* Low-level access to stored prepared statements */
+bool CheckQuery(const char *stmt_name);
 extern void StorePreparedStatement(const char *stmt_name,
 					   CachedPlanSource *plansource,
 					   bool from_sql);

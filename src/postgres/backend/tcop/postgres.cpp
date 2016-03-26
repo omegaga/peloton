@@ -80,6 +80,7 @@
 
 // TODO: Peloton Changes
 #include "backend/logging/log_manager.h"
+#include "murmur3/MurmurHash3.h"
 
 
 /* ----------------
@@ -884,7 +885,6 @@ pg_plan_queries(List *querytrees, int cursorOptions, ParamListInfo boundParams)
   return stmt_list;
 }
 
-
 /*
  * exec_simple_query
  *
@@ -996,6 +996,29 @@ exec_simple_query(const char *query_string)
     set_ps_display(commandTag, false);
 
     BeginCommand(commandTag, dest);
+
+    if (IsA(parsetree, SelectStmt)) {
+      char *queryString = nodeToString(parsetree);
+      int32_t hash = peloton::MurmurHash3_x64_128(queryString, strlen(queryString), 0);
+
+      char hash_str[1024];
+      strcpy(hash_str, "hash_str");
+      strcat(hash_str, std::to_string(hash).c_str());
+      char *prepared_name = queryString;
+
+      PrepareStmt *prepareStmt = makeNode(PrepareStmt);
+      prepareStmt->name = hash_str;
+      prepareStmt->query = parsetree;
+      char hash_str_copy[1024];
+      strcpy(hash_str_copy, hash_str);
+      // TODO: only prepare if not prepared (obviously)
+      if (!CheckQuery(hash_str_copy))
+        PrepareQuery(prepareStmt, hash_str_copy);
+
+      ExecuteStmt *executeStmt = makeNode(ExecuteStmt);
+      executeStmt->name = hash_str;
+      parsetree = executeStmt;
+    }
 
     /*
      * If we are in an aborted transaction, reject all commands except

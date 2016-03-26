@@ -432,6 +432,24 @@ InitQueryHashTable(void)
 								   HASH_ELEM);
 }
 
+bool
+CheckQuery(const char *stmt_name)
+{
+  bool found;
+
+  /* Initialize the hash table, if necessary */
+  if (!prepared_queries)
+    InitQueryHashTable();
+
+  /* Add entry to hash table */
+  hash_search(
+      prepared_queries,
+      stmt_name,
+      HASH_FIND,
+      &found);
+  return found;
+}
+
 /*
  * Store all the data pertaining to a query in the hash table using
  * the specified key.  The passed CachedPlanSource should be "unsaved"
