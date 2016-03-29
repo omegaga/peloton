@@ -885,6 +885,118 @@ pg_plan_queries(List *querytrees, int cursorOptions, ParamListInfo boundParams)
   return stmt_list;
 }
 
+static void
+extract_params_where(const Node *whereClause, List **params, List **argtypes);
+
+static void
+extract_params(const Node *parsetree, List **params, List **argtypes);
+
+static void
+extract_params_value(A_Const *expr, List **params, List **argtypes)
+{
+  // Add to params
+  *params = lappend(*params, expr);
+
+  char *pg_catalog_str = (char *) palloc(11);
+  strcpy(pg_catalog_str, "pg_catalog");
+
+  TypeName *typeName = makeNode(TypeName);
+  typeName->names = list_make1(makeString(pg_catalog_str));
+
+  char *type_str;
+  switch (expr->val.type) {
+    case T_Integer: {
+      type_str = "int4";
+    } break;
+    case T_Float: {
+      type_str = "float8";
+    } break;
+    case T_String: {
+      type_str = "varchar";
+    } break;
+    case T_BitString: {
+      // TODO: set to correct value
+      type_str = "null";
+    } break;
+    case T_Null: {
+      type_str = "null";
+    } break;
+    default: {
+      // Should not be in this branch
+      Assert(false);
+    }
+  }
+  char *type_str_copy = (char *) palloc(strlen(type_str));
+  strcpy(type_str_copy, type_str);
+
+  // Generate type name
+  typeName->names = lappend(typeName->names, makeString(type_str_copy));
+  *argtypes = lappend(*argtypes, typeName);
+}
+
+static void
+extract_params_where(const Node *whereClause, List **params, List **argtypes)
+{
+  Assert(whereClause != NIL);
+  switch (whereClause->type) {
+    case T_A_Expr: {
+      A_Expr *a_expr = (A_Expr *) whereClause;
+
+      // Check if left expression is a constant
+      if (a_expr->lexpr->type == T_A_Const) {
+        // Extract constant and append to params and argtypes
+        A_Const *lexpr = (A_Const *) a_expr->lexpr;
+        extract_params_value(lexpr, params, argtypes);
+
+        // Change original constant to argument
+        ParamRef *paramRef = makeNode(ParamRef);
+        paramRef->number = list_length(*params);
+        a_expr->lexpr = paramRef;
+      }
+
+      // Check if left expression is a constant
+      if (a_expr->rexpr->type == T_A_Const) {
+        // Extract constant and append to params and argtypes
+        A_Const *rexpr = (A_Const *) a_expr->rexpr;
+        extract_params_value(rexpr, params, argtypes);
+
+        // Change original constant to argument
+        ParamRef *paramRef = makeNode(ParamRef);
+        paramRef->number = list_length(*params);
+        a_expr->rexpr = paramRef;
+      }
+    } break;
+    case T_BoolExpr: {
+      BoolExpr *boolExpr = (BoolExpr *) whereClause;
+      ListCell *arg;
+      // Evaluate all arguments
+      foreach (arg, boolExpr->args) {
+        Node * arg_node = (Node *) lfirst(arg);
+        extract_params_where(arg_node, params, argtypes);
+      }
+    } break;
+    case T_SubLink: {
+      SubLink *subLink = (SubLink *) whereClause;
+      Assert(subLink->subselect != NIL);
+      extract_params(subLink->subselect, params, argtypes);
+    } break;
+    default: {
+      return;
+    }
+  }
+}
+
+static void
+extract_params(const Node *parsetree, List **params, List **argtypes)
+{
+  Assert(parsetree->type == T_SelectSmtmt);
+  SelectStmt *selectStmt = (SelectStmt *) parsetree;
+
+  Node *whereClause = selectStmt->whereClause;
+  if (whereClause != NIL)
+    extract_params_where(whereClause, params, argtypes);
+}
+
 /*
  * exec_simple_query
  *
@@ -998,25 +1110,30 @@ exec_simple_query(const char *query_string)
     BeginCommand(commandTag, dest);
 
     if (IsA(parsetree, SelectStmt)) {
+      List *params = NIL;
+      List *argtypes = NIL;
+      extract_params(parsetree, &params, &argtypes);
+
       char *queryString = nodeToString(parsetree);
       int32_t hash = peloton::MurmurHash3_x64_128(queryString, strlen(queryString), 0);
 
       char hash_str[1024];
       strcpy(hash_str, "hash_str");
       strcat(hash_str, std::to_string(hash).c_str());
-      char *prepared_name = queryString;
 
-      PrepareStmt *prepareStmt = makeNode(PrepareStmt);
-      prepareStmt->name = hash_str;
-      prepareStmt->query = parsetree;
       char hash_str_copy[1024];
       strcpy(hash_str_copy, hash_str);
-      // TODO: only prepare if not prepared (obviously)
-      if (!CheckQuery(hash_str_copy))
+      if (!CheckQuery(hash_str_copy)) {
+        PrepareStmt *prepareStmt = makeNode(PrepareStmt);
+        prepareStmt->name = hash_str;
+        prepareStmt->query = parsetree;
+        prepareStmt->argtypes = argtypes;
         PrepareQuery(prepareStmt, hash_str_copy);
+      }
 
       ExecuteStmt *executeStmt = makeNode(ExecuteStmt);
       executeStmt->name = hash_str;
+      executeStmt->params = params;
       parsetree = executeStmt;
     }
 
