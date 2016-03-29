@@ -1090,6 +1090,7 @@ exec_simple_query(const char *query_string)
     Node	   *parsetree = (Node *) lfirst(parsetree_item);
     bool		snapshot_set = false;
     const char *commandTag;
+    char prepStmtName[1024];
     char		completionTag[COMPLETION_TAG_BUFSIZE];
     List	   *querytree_list,
     *plantree_list;
@@ -1135,6 +1136,7 @@ exec_simple_query(const char *query_string)
       executeStmt->name = hash_str;
       executeStmt->params = params;
       parsetree = executeStmt;
+      strcpy(prepStmtName, hash_str);
     }
 
     /*
@@ -1202,7 +1204,7 @@ exec_simple_query(const char *query_string)
      * portal anyway.
      */
     PortalDefineQuery(portal,
-                      NULL,
+                      prepStmtName,
                       query_string,
                       commandTag,
                       plantree_list,

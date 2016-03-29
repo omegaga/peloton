@@ -280,7 +280,7 @@ ExecuteQuery(ExecuteStmt *stmt, IntoClause *intoClause,
 	}
 
 	PortalDefineQuery(portal,
-					  NULL,
+					  stmt->name,
 					  query_string,
 					  entry->plansource->commandTag,
 					  plan_list,
