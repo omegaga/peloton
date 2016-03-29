@@ -1,12 +1,12 @@
 //===----------------------------------------------------------------------===//
 //
-//                         PelotonDB
+//                         Peloton
 //
 // types.h
 //
 // Identification: src/backend/common/types.h
 //
-// Copyright (c) 2015, Carnegie Mellon University Database Group
+// Copyright (c) 2015-16, Carnegie Mellon University Database Group
 //
 //===----------------------------------------------------------------------===//
 
@@ -106,9 +106,6 @@ class Value;
 #define DEFAULT_DB_NAME "default"
 
 #define DEFAULT_TUPLES_PER_TILEGROUP 1000
-
-// Ref count starting point
-#define BASE_REF_COUNT 1
 
 // TODO: Use ThreadLocalPool ?
 // This needs to be >= the VoltType.MAX_VALUE_LENGTH defined in java, currently
@@ -359,16 +356,16 @@ enum ExpressionType {
 //===--------------------------------------------------------------------===//
 
 enum ConcurrencyType {
-    CONCURRENCY_TYPE_OCC = 0, // optimistic
-    CONCURRENCY_TYPE_2PL = 1, // pessimistic
-    CONCURRENCY_TYPE_TO = 2, // timestamp ordering
-    CONCURRENCY_TYPE_SSI = 3 // serializable snapshot isolation
+  CONCURRENCY_TYPE_OCC = 0,  // optimistic
+  CONCURRENCY_TYPE_2PL = 1,  // pessimistic
+  CONCURRENCY_TYPE_TO = 2,   // timestamp ordering
+  CONCURRENCY_TYPE_SSI = 3   // serializable snapshot isolation
 };
 
 enum IsolationLevelType {
-    ISOLATION_LEVEL_TYPE_FULL = 0, // full serializability
-    ISOLATION_LEVEL_TYPE_SNAPSHOT = 1, // snapshot isolation
-    ISOLATION_LEVEL_TYPE_REPEATABLE_READ = 2 // repeatable read
+  ISOLATION_LEVEL_TYPE_FULL = 0,            // full serializability
+  ISOLATION_LEVEL_TYPE_SNAPSHOT = 1,        // snapshot isolation
+  ISOLATION_LEVEL_TYPE_REPEATABLE_READ = 2  // repeatable read
 };
 
 enum BackendType {
@@ -753,9 +750,7 @@ struct ItemPointer {
 
   ItemPointer(oid_t block, oid_t offset) : block(block), offset(offset) {}
 
-  bool IsNull() {
-    return (block == INVALID_OID && offset == INVALID_OID);
-  }
+  bool IsNull() { return (block == INVALID_OID && offset == INVALID_OID); }
 };
 
 extern ItemPointer INVALID_ITEMPOINTER;

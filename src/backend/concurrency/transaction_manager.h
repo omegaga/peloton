@@ -1,12 +1,12 @@
 //===----------------------------------------------------------------------===//
 //
-//                         PelotonDB
+//                         Peloton
 //
 // transaction_manager.h
 //
 // Identification: src/backend/concurrency/transaction_manager.h
 //
-// Copyright (c) 2015, Carnegie Mellon University Database Group
+// Copyright (c) 2015-16, Carnegie Mellon University Database Group
 //
 //===----------------------------------------------------------------------===//
 
@@ -25,7 +25,7 @@
 namespace peloton {
 namespace concurrency {
 
-//class Transaction;
+// class Transaction;
 
 extern thread_local Transaction *current_txn;
 
@@ -46,33 +46,50 @@ class TransactionManager {
                          const cid_t &tuple_begin_cid,
                          const cid_t &tuple_end_cid) = 0;
 
-  virtual bool IsOwner(storage::TileGroup *tile_group, const oid_t &tuple_id) = 0;
+  virtual bool IsOwner(storage::TileGroup *tile_group,
+                       const oid_t &tuple_id) = 0;
 
-  virtual bool IsAccessable(storage::TileGroup *tile_group, const oid_t &tuple_id) = 0;
+  virtual bool IsAccessable(storage::TileGroup *tile_group,
+                            const oid_t &tuple_id) = 0;
 
-  virtual bool PerformRead(const oid_t &tile_group_id, const oid_t &tuple_id) = 0;
+  virtual bool PerformRead(const oid_t &tile_group_id,
+                           const oid_t &tuple_id) = 0;
 
-  virtual bool PerformWrite(const oid_t &tile_group_id, const oid_t &tuple_id, const ItemPointer &new_location) = 0;
+  virtual bool PerformUpdate(const oid_t &tile_group_id, const oid_t &tuple_id,
+                             const ItemPointer &new_location) = 0;
 
-  virtual bool AcquireTuple(storage::TileGroup *tile_group, const oid_t &physical_tuple_id) = 0;
+  virtual bool AcquireTuple(storage::TileGroup *tile_group,
+                            const oid_t &physical_tuple_id) = 0;
 
-  virtual bool PerformInsert(const oid_t &tile_group_id, const oid_t &tuple_id) = 0;
+  virtual bool PerformInsert(const oid_t &tile_group_id,
+                             const oid_t &tuple_id) = 0;
 
-  virtual bool PerformDelete(const oid_t &tile_group_id, const oid_t &tuple_id, const ItemPointer &new_location) = 0;
+  virtual bool PerformDelete(const oid_t &tile_group_id, const oid_t &tuple_id,
+                             const ItemPointer &new_location) = 0;
 
-  virtual void SetDeleteVisibility(const oid_t &tile_group_id, const oid_t &tuple_id) = 0;
+  virtual void SetInsertVisibility(const oid_t &tile_group_id,
+                                   const oid_t &tuple_id) = 0;
 
-  virtual void SetUpdateVisibility(const oid_t &tile_group_id, const oid_t &tuple_id) = 0;
+  virtual void SetDeleteVisibility(const oid_t &tile_group_id,
+                                   const oid_t &tuple_id) = 0;
 
-  virtual void SetInsertVisibility(const oid_t &tile_group_id, const oid_t &tuple_id) = 0;
+  virtual void SetUpdateVisibility(const oid_t &tile_group_id,
+                                   const oid_t &tuple_id) = 0;
 
-  void SetTransactionResult(const Result result) { current_txn->SetResult(result); }
+  void SetTransactionResult(const Result result) {
+    current_txn->SetResult(result);
+  }
 
-  Transaction *BeginTransaction() {
+  virtual Transaction *BeginTransaction() {
     Transaction *txn =
         new Transaction(GetNextTransactionId(), GetNextCommitId());
     current_txn = txn;
     return txn;
+  }
+
+  virtual void EndTransaction() {
+    delete current_txn;
+    current_txn = nullptr;
   }
 
   virtual Result CommitTransaction() = 0;
