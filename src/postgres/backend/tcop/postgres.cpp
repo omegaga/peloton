@@ -161,6 +161,12 @@ thread_local static bool ignore_till_sync = false;
  * in order to reduce overhead for short-lived queries.
  */
 thread_local static CachedPlanSource *unnamed_stmt_psrc = NULL;
+thread_local static bool cache_adhoc = false;
+thread_local static char adhoc_stmt_name[1024];
+thread_local static int adhoc_stmt_num_params = 0;
+thread_local static Oid *adhoc_stmt_param_types = NULL;
+thread_local static List *adhoc_stmt_arg_types = NIL;
+thread_local static List *adhoc_stmt_param_list = NIL;
 
 /* assorted command-line switches */
 thread_local static const char *userDoption = NULL;	/* -D switch */
@@ -897,40 +903,40 @@ extract_params_value(A_Const *expr, List **params, List **argtypes)
   // Add to params
   *params = lappend(*params, expr);
 
-  char *pg_catalog_str = (char *) palloc(11);
-  strcpy(pg_catalog_str, "pg_catalog");
-
   TypeName *typeName = makeNode(TypeName);
-  typeName->names = list_make1(makeString(pg_catalog_str));
+  typeName->names = NIL;
+
+  Oid typeOid;
 
   char *type_str;
   switch (expr->val.type) {
     case T_Integer: {
-      type_str = "int4";
+      typeOid = 23;
     } break;
     case T_Float: {
-      type_str = "float8";
+      typeOid = 401;
     } break;
     case T_String: {
-      type_str = "varchar";
+      // TODO: check if the value is correct
+      typeOid = 1043;
     } break;
     case T_BitString: {
-      // TODO: set to correct value
-      type_str = "null";
+      // TODO: check if the value is correct
+      typeOid = 1562;
     } break;
     case T_Null: {
-      type_str = "null";
+      // TODO: check if the value is correct
+      typeOid = 0;
     } break;
     default: {
       // Should not be in this branch
+      // TODO: change to Postgres style ereport
       Assert(false);
     }
   }
-  char *type_str_copy = (char *) palloc(strlen(type_str));
-  strcpy(type_str_copy, type_str);
 
   // Generate type name
-  typeName->names = lappend(typeName->names, makeString(type_str_copy));
+  typeName->typeOid = typeOid;
   *argtypes = lappend(*argtypes, typeName);
 }
 
@@ -1362,6 +1368,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
   bool		is_named;
   bool		save_log_statement_stats = log_statement_stats;
   char		msec_str[32];
+  bool stmt_exists = false;
 
   /*
    * Report query to various monitoring facilities.
@@ -1408,16 +1415,17 @@ exec_parse_message(const char *query_string,	/* string to execute */
   }
   else
   {
+    oldcontext = MemoryContextSwitchTo(MessageContext);
     /* Unnamed prepared statement --- release any prior unnamed stmt */
-    drop_unnamed_stmt();
+    // drop_unnamed_stmt();
     /* Create context for parsing */
-    unnamed_stmt_context =
-        AllocSetContextCreate(MessageContext,
-                              "unnamed prepared statement",
-                              ALLOCSET_DEFAULT_MINSIZE,
-                              ALLOCSET_DEFAULT_INITSIZE,
-                              ALLOCSET_DEFAULT_MAXSIZE);
-    oldcontext = MemoryContextSwitchTo(unnamed_stmt_context);
+    // unnamed_stmt_context =
+    //     AllocSetContextCreate(MessageContext,
+    //                           "unnamed prepared statement",
+    //                           ALLOCSET_DEFAULT_MINSIZE,
+    //                           ALLOCSET_DEFAULT_INITSIZE,
+    //                           ALLOCSET_DEFAULT_MAXSIZE);
+    // oldcontext = MemoryContextSwitchTo(unnamed_stmt_context);
   }
 
   /*
@@ -1443,6 +1451,43 @@ exec_parse_message(const char *query_string,	/* string to execute */
     int			i;
 
     raw_parse_tree = (Node *) linitial(parsetree_list);
+
+    if (!is_named && IsA(raw_parse_tree, SelectStmt)) {
+      List *params = NIL;
+      List *argtypes = NIL;
+      extract_params(raw_parse_tree, &params, &argtypes);
+
+      char *queryString = nodeToString(raw_parse_tree);
+      int32_t hash = peloton::MurmurHash3_x64_128(queryString, strlen(queryString), 0);
+
+      char hash_str[1024];
+      strcpy(hash_str, "hash_str");
+      strcat(hash_str, std::to_string(hash).c_str());
+
+      char hash_str_copy[1024];
+      strcpy(hash_str_copy, hash_str);
+      if (CheckQuery(hash_str_copy)) {
+        stmt_exists = true;
+      }
+
+      numParams = list_length(params);
+      paramTypes = (Oid *) palloc(sizeof(Oid) * numParams);
+      for (i = 0; i < numParams; i++)
+      {
+        paramTypes[i] = 0;
+      }
+      is_named = true;
+      // Update thread local variables
+      cache_adhoc = true;
+      strcpy(adhoc_stmt_name, hash_str);
+      adhoc_stmt_num_params = numParams;
+      adhoc_stmt_param_types = paramTypes;
+      adhoc_stmt_arg_types = argtypes;
+      adhoc_stmt_param_list = params;
+    } else {
+      cache_adhoc = false;
+    }
+
 
     /*
      * Get the command name for possible use in status display.
@@ -1553,7 +1598,15 @@ exec_parse_message(const char *query_string,	/* string to execute */
     /*
      * Store the query as a prepared statement.
      */
-    StorePreparedStatement(stmt_name, psrc, false);
+    if (cache_adhoc)
+    {
+      if (!stmt_exists)
+        StorePreparedStatement(adhoc_stmt_name, psrc, false);
+    }
+    else
+    {
+      StorePreparedStatement(stmt_name, psrc, false);
+    }
   }
   else
   {
@@ -1635,6 +1688,9 @@ exec_bind_message(StringInfo input_message)
   portal_name = pq_getmsgstring(input_message);
   stmt_name = pq_getmsgstring(input_message);
 
+  if (cache_adhoc)
+    stmt_name = adhoc_stmt_name;
+
   ereport(DEBUG2,
           (errmsg("bind %s to %s",
                   *portal_name ? portal_name : "<unnamed>",
@@ -1682,6 +1738,7 @@ exec_bind_message(StringInfo input_message)
 
   /* Get the parameter format codes */
   numPFormats = pq_getmsgint(input_message, 2);
+
   if (numPFormats > 0)
   {
     int			i;
@@ -1693,6 +1750,12 @@ exec_bind_message(StringInfo input_message)
 
   /* Get the parameter value count */
   numParams = pq_getmsgint(input_message, 2);
+
+  if (cache_adhoc) {
+    numParams = adhoc_stmt_num_params;
+    // Silent warning message
+    numPFormats = adhoc_stmt_num_params;
+  }
 
   if (numPFormats > 1 && numPFormats != numParams)
     ereport(ERROR,
@@ -1767,7 +1830,47 @@ exec_bind_message(StringInfo input_message)
   /*
    * Fetch parameters, if any, and store in the portal's memory context.
    */
-  if (numParams > 0)
+  if (cache_adhoc)
+  {
+    int paramno;
+    ListCell *arg_item;
+    ListCell *param_item;
+
+    params = (ParamListInfo) palloc(offsetof(ParamListInfoData, params) +
+                                    numParams * sizeof(ParamExternData));
+
+    params->paramFetch = NULL;
+    params->paramFetchArg = NULL;
+    params->parserSetup = NULL;
+    params->parserSetupArg = NULL;
+    params->numParams = numParams;
+
+    // Fill in param type metadata
+    paramno = 0;
+    foreach (arg_item, adhoc_stmt_arg_types)
+    {
+      TypeName *arg = (TypeName *) lfirst(arg_item);
+      params->params[paramno].isnull = (arg->typeOid == 0);
+      /*
+       * We mark the params as CONST.  This ensures that any custom plan
+       * makes full use of the parameter values.
+       */
+      params->params[paramno].pflags = PARAM_FLAG_CONST;
+      params->params[paramno].ptype = arg->typeOid;
+
+      paramno++;
+    }
+    // Fill in param values
+    paramno = 0;
+    foreach (param_item, adhoc_stmt_param_list)
+    {
+      A_Const *param = (A_Const *) lfirst(param_item);
+      // TODO: only can handle int now!
+      params->params[paramno].value = intVal(&(param->val));
+
+      paramno++;
+    }
+  } else if (numParams > 0)
   {
     int			paramno;
 
