@@ -81,13 +81,19 @@ class TileGroup : public Printable {
 
   // insert tuple at specific tuple slot
   // used by recovery mode
-  // TODO: logging team: remove the transaction_id parameter.
-  oid_t InsertTuple(txn_id_t transaction_id, oid_t tuple_slot_id,
+  oid_t InsertTupleFromRecovery(cid_t commit_id, oid_t tuple_slot_id,
                     const Tuple *tuple);
 
-  // delete tuple at given slot if it is not already locked
-  // bool DeleteTuple(txn_id_t transaction_id, oid_t tuple_slot_id,
-  //                  cid_t last_cid);
+  // insert tuple at specific tuple slot
+  // used by recovery mode
+  oid_t DeleteTupleFromRecovery(cid_t commit_id, oid_t tuple_slot_id);
+
+  // insert tuple at specific tuple slot
+  // used by recovery mode
+  oid_t UpdateTupleFromRecovery(cid_t commit_id, oid_t tuple_slot_id, ItemPointer new_location);
+
+  oid_t InsertTupleFromCheckpoint(oid_t tuple_slot_id,
+                    const Tuple *tuple, cid_t commit_id);
 
   //===--------------------------------------------------------------------===//
   // Utilities

@@ -10,6 +10,51 @@
 //
 //===----------------------------------------------------------------------===//
 
+/**
+ * How to use the transaction test utilities
+ *
+ * These utilities are used to construct test cases for transaction and
+ * concurrency control related tests. It makes you be able to describe the
+ * schedule of each transaction (when to do what), i.e. you can describe the
+ * serilized orders of each operation among the transactions.
+ *
+ * To schedule a txn tests, you need a TransactionScheduler (scheduler). Then
+ * write the schedule in the following way: scheduler.Txn(n).ACTION(args)
+ * scheduler.Txn(0).Insert(0, 1);
+ * scheduler.Txn(0).Read(0);
+ * scheduler.Commit();
+ *  => Notice that this order will be the serial order to excute the operaions
+ *
+ * There's a CreateTable() method, it will create a table with two columns:
+ * key and value, and a primiary index on the key column. The table is pre-
+ * populated with the following tuples:
+ * (0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0), (8, 0),(9, 0)
+ *
+ * ACTION supported:
+ * * Insert(key, value): Insert (key, value) into DB, key must be unique
+ * * Read(key): Read value from DB, if the key does not exist, will read a value
+ * *            of -1
+ * * Update(key, value): Update the value of *key* to *value*
+ * * Delete(key): delete tuple with key *key*
+ * * Scan(key): Scan the table for key >= *key*, if nothing satisfies key >=
+ * *            *key*, will scan a value of -1
+ * * ReadStore(key, modify): Read value with key *key* from DB, and store the
+ * *                         (result+*modify*) temporarily, the stored value
+ * *                         can be further refered as TXN_STORED_VALUE in
+ * *                         any above operations.
+ * * Commit(): Commit the txn
+ * * Abort(): Abort the txn
+ *
+ * Then, run the schedules by scheduler.Run(), it will schedule the txns to
+ * execute corresponding opersions.
+ * The results of executing Run() can be fetched from
+ * scheduler.schedules[TXN_ID].results[]. It will store the results from Read()
+ * and Scan(), in the order they executed. The txn result (SUCCESS, FAILURE)
+ * can be retrieved from scheduler.schedules[TXN_ID].txn_result.
+ *
+ * See isolation_level_test.cpp for examples.
+ */
+
 #include "harness.h"
 #include "backend/catalog/schema.h"
 #include "backend/storage/tile_group_factory.h"
@@ -61,7 +106,8 @@ enum txn_op_t {
   TXN_OP_SCAN,
   TXN_OP_ABORT,
   TXN_OP_COMMIT,
-  TXN_OP_READ_STORE
+  TXN_OP_READ_STORE,
+  TXN_OP_UPDATE_BY_VALUE
 };
 
 #define TXN_STORED_VALUE      -10000
@@ -71,7 +117,20 @@ class TransactionTestsUtil {
   // Create a simple table with two columns: the id column and the value column
   // Further add a unique index on the id column. The table has one tuple (0, 0)
   // when created
-  static storage::DataTable *CreateTable();
+  static storage::DataTable *CreateTable(int num_key = 10,
+                                         std::string table_name = "TEST_TABLE",
+                                         oid_t database_id = INVALID_OID,
+                                         oid_t relation_id = INVALID_OID,
+                                         oid_t index_oid = 1234,
+                                         bool need_primary_index = false);
+
+  // Create the same table as CreateTable with primary key constrainst on id and
+  // unique key constraints on value
+  static storage::DataTable *CreatePrimaryKeyUniqueKeyTable();
+
+  // Create the same table with combined primary key constrainst on (id, value)
+  static storage::DataTable *CreateCombinedPrimaryKeyTable();
+
   static bool ExecuteInsert(concurrency::Transaction *txn,
                             storage::DataTable *table, int id, int value);
   static bool ExecuteRead(concurrency::Transaction *txn,
@@ -80,12 +139,14 @@ class TransactionTestsUtil {
                             storage::DataTable *table, int id);
   static bool ExecuteUpdate(concurrency::Transaction *txn,
                             storage::DataTable *table, int id, int value);
+  static bool ExecuteUpdateByValue(concurrency::Transaction *txn,
+                                   storage::DataTable *table, int old_value, int new_value);
   static bool ExecuteScan(concurrency::Transaction *txn,
                           std::vector<int> &results, storage::DataTable *table,
                           int id);
 
  private:
-  static planner::ProjectInfo *MakeProjectInfoFromTuple(
+  static std::unique_ptr<const planner::ProjectInfo> MakeProjectInfoFromTuple(
       const storage::Tuple *tuple);
   static expression::ComparisonExpression<expression::CmpEq> *MakePredicate(
       int id);
@@ -121,7 +182,7 @@ class TransactionThread {
         table(table_),
         cur_seq(0),
         go(false) {
-    LOG_TRACE("Thread has %d ops", (int)sched->operations.size());
+    LOG_INFO("Thread has %d ops", (int)sched->operations.size());
   }
 
   void RunLoop() {
@@ -139,9 +200,20 @@ class TransactionThread {
     }
   }
 
-  void Run() {
-    std::thread thread(&TransactionThread::RunLoop, this);
-    thread.detach();
+  void RunNoWait() {
+    while (true) {
+      ExecuteNext();
+      if (cur_seq == (int)schedule->operations.size()) {
+        break;
+      }
+    }
+  }
+
+  std::thread Run(bool no_wait = false) {
+    if (!no_wait)
+      return std::thread(&TransactionThread::RunLoop, this);
+    else
+      return std::thread(&TransactionThread::RunNoWait, this);
   }
 
   void ExecuteNext() {
@@ -167,13 +239,13 @@ class TransactionThread {
     // Execute the operation
     switch (op) {
       case TXN_OP_INSERT: {
-        LOG_TRACE("Execute Insert");
+        LOG_INFO("Execute Insert");
         execute_result =
             TransactionTestsUtil::ExecuteInsert(txn, table, id, value);
         break;
       }
       case TXN_OP_READ: {
-        LOG_TRACE("Execute Read");
+        LOG_INFO("Execute Read");
         int result;
         execute_result =
             TransactionTestsUtil::ExecuteRead(txn, table, id, result);
@@ -181,24 +253,31 @@ class TransactionThread {
         break;
       }
       case TXN_OP_DELETE: {
-        LOG_TRACE("Execute Delete");
+        LOG_INFO("Execute Delete");
         execute_result = TransactionTestsUtil::ExecuteDelete(txn, table, id);
         break;
       }
       case TXN_OP_UPDATE: {
-        LOG_TRACE("Execute Update");
+        LOG_INFO("Execute Update");
         execute_result =
             TransactionTestsUtil::ExecuteUpdate(txn, table, id, value);
         break;
       }
       case TXN_OP_SCAN: {
-        LOG_TRACE("Execute Scan");
+        LOG_INFO("Execute Scan");
         execute_result = TransactionTestsUtil::ExecuteScan(
             txn, schedule->results, table, id);
         break;
       }
+      case TXN_OP_UPDATE_BY_VALUE: {
+        int old_value = id;
+        int new_value = value;
+        execute_result = TransactionTestsUtil::ExecuteUpdateByValue(
+            txn, table, old_value, new_value);
+        break;
+      }
       case TXN_OP_ABORT: {
-        LOG_TRACE("Abort");
+        LOG_INFO("Abort");
         // Assert last operation
         assert(cur_seq == (int)schedule->operations.size());
         schedule->txn_result = txn_manager->AbortTransaction();
@@ -215,6 +294,7 @@ class TransactionThread {
         execute_result =
             TransactionTestsUtil::ExecuteRead(txn, table, id, result);
         schedule->results.push_back(result);
+        LOG_INFO("READ_STORE, key: %d, read: %d, modify and stored as: %d", id, result, result+value);
         schedule->stored_value = result + value;
         break;
       }
@@ -223,8 +303,8 @@ class TransactionThread {
     if (txn != NULL && txn->GetResult() == RESULT_FAILURE) {
       txn_manager->AbortTransaction();
       txn = NULL;
-      LOG_TRACE("ABORT NOW");
-      if (execute_result == false) LOG_TRACE("Executor returns false");
+      LOG_INFO("ABORT NOW");
+      if (execute_result == false) LOG_INFO("Executor returns false");
       schedule->txn_result = RESULT_ABORTED;
     }
   }
@@ -245,23 +325,38 @@ class TransactionScheduler {
       : txn_manager(txn_manager_),
         table(datatable_),
         time(0),
-        schedules(num_txn) {}
+        schedules(num_txn),
+        concurrent(false) {}
 
   void Run() {
+    // Run the txns according to the schedule
     for (int i = 0; i < (int)schedules.size(); i++) {
       tthreads.emplace_back(&schedules[i], table, txn_manager);
     }
-    for (int i = 0; i < (int)schedules.size(); i++) {
-      tthreads[i].Run();
-    }
-    for (auto itr = sequence.begin(); itr != sequence.end(); itr++) {
-      LOG_TRACE("Execute %d", (int)itr->second);
-      tthreads[itr->second].go = true;
-      while (tthreads[itr->second].go) {
-        std::chrono::milliseconds sleep_time(1);
-        std::this_thread::sleep_for(sleep_time);
+    if (!concurrent) {
+      for (int i = 0; i < (int)schedules.size(); i++) {
+        std::thread t = tthreads[i].Run();
+        t.detach();
       }
-      LOG_TRACE("Done %d", (int)itr->second);
+      for (auto itr = sequence.begin(); itr != sequence.end(); itr++) {
+        LOG_INFO("Execute %d", (int)itr->second);
+        tthreads[itr->second].go = true;
+        while (tthreads[itr->second].go) {
+          std::chrono::milliseconds sleep_time(1);
+          std::this_thread::sleep_for(sleep_time);
+        }
+        LOG_INFO("Done %d", (int)itr->second);
+      }
+    } else {
+      // Run the txns concurrently
+      std::vector<std::thread> threads(schedules.size());
+      for (int i = 0; i < (int)schedules.size(); i++) {
+        threads[i] = tthreads[i].Run(true);
+      }
+      for (auto &thread : threads) {
+        thread.join();
+      }
+      LOG_INFO("Done conccurent transaction schedule");
     }
   }
 
@@ -299,12 +394,20 @@ class TransactionScheduler {
     schedules[cur_txn_id].operations.emplace_back(TXN_OP_COMMIT, 0, 0);
     sequence[time++] = cur_txn_id;
   }
-  // ReadStore will store the (result of read + modify) to the schedule, the 
+  void UpdateByValue(int old_value, int new_value) {
+    schedules[cur_txn_id].operations.emplace_back(TXN_OP_UPDATE_BY_VALUE, old_value, new_value);
+    sequence[time++] = cur_txn_id;
+  }
+  // ReadStore will store the (result of read + modify) to the schedule, the
   // schedule may refer it by using TXN_STORED_VALUE in adding a new operation
   // to a schedule. See usage in isolation_level_test SIAnomalyTest.
   void ReadStore(int id, int modify) {
     schedules[cur_txn_id].operations.emplace_back(TXN_OP_READ_STORE, id, modify);
     sequence[time++] = cur_txn_id;
+  }
+
+  void SetConcurrent(bool flag) {
+    concurrent = flag;
   }
 
   concurrency::TransactionManager *txn_manager;
@@ -314,6 +417,7 @@ class TransactionScheduler {
   std::vector<TransactionThread> tthreads;
   std::map<int, int> sequence;
   int cur_txn_id;
+  bool concurrent;
 };
 }
 }
