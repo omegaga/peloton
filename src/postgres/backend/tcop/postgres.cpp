@@ -103,7 +103,7 @@ int			max_stack_depth = 100;
 /* wait N seconds to allow attach from a debugger */
 int			PostAuthDelay = 0;
 
-
+bool enable_adhoc_cache = true;
 
 /* ----------------
  *		private___ variables
@@ -163,8 +163,6 @@ thread_local static bool ignore_till_sync = false;
 thread_local static CachedPlanSource *unnamed_stmt_psrc = NULL;
 thread_local static bool cache_adhoc = false;
 thread_local static char adhoc_stmt_name[1024];
-thread_local static int adhoc_stmt_num_params = 0;
-thread_local static Oid *adhoc_stmt_param_types = NULL;
 thread_local static List *adhoc_stmt_arg_types = NIL;
 thread_local static List *adhoc_stmt_param_list = NIL;
 
@@ -906,9 +904,8 @@ extract_params_value(A_Const *expr, List **params, List **argtypes)
   TypeName *typeName = makeNode(TypeName);
   typeName->names = NIL;
 
-  Oid typeOid;
+  Oid typeOid = 0;
 
-  char *type_str;
   switch (expr->val.type) {
     case T_Integer: {
       typeOid = 23;
@@ -1368,7 +1365,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
   bool		is_named;
   bool		save_log_statement_stats = log_statement_stats;
   char		msec_str[32];
-  bool stmt_exists = false;
+  bool adhoc_stmt_exists = false;
 
   /*
    * Report query to various monitoring facilities.
@@ -1415,17 +1412,16 @@ exec_parse_message(const char *query_string,	/* string to execute */
   }
   else
   {
-    oldcontext = MemoryContextSwitchTo(MessageContext);
     /* Unnamed prepared statement --- release any prior unnamed stmt */
-    // drop_unnamed_stmt();
+     drop_unnamed_stmt();
     /* Create context for parsing */
-    // unnamed_stmt_context =
-    //     AllocSetContextCreate(MessageContext,
-    //                           "unnamed prepared statement",
-    //                           ALLOCSET_DEFAULT_MINSIZE,
-    //                           ALLOCSET_DEFAULT_INITSIZE,
-    //                           ALLOCSET_DEFAULT_MAXSIZE);
-    // oldcontext = MemoryContextSwitchTo(unnamed_stmt_context);
+     unnamed_stmt_context =
+         AllocSetContextCreate(MessageContext,
+                               "unnamed prepared statement",
+                               ALLOCSET_DEFAULT_MINSIZE,
+                               ALLOCSET_DEFAULT_INITSIZE,
+                               ALLOCSET_DEFAULT_MAXSIZE);
+     oldcontext = MemoryContextSwitchTo(unnamed_stmt_context);
   }
 
   /*
@@ -1452,13 +1448,14 @@ exec_parse_message(const char *query_string,	/* string to execute */
 
     raw_parse_tree = (Node *) linitial(parsetree_list);
 
-    if (!is_named && IsA(raw_parse_tree, SelectStmt)) {
+    if (enable_adhoc_cache && !is_named && IsA(raw_parse_tree, SelectStmt)) {
       List *params = NIL;
       List *argtypes = NIL;
       extract_params(raw_parse_tree, &params, &argtypes);
 
       char *queryString = nodeToString(raw_parse_tree);
-      int32_t hash = peloton::MurmurHash3_x64_128(queryString, strlen(queryString), 0);
+      int32_t hash = peloton::MurmurHash3_x64_128(queryString,
+                                                  strlen(queryString), 0);
 
       char hash_str[1024];
       strcpy(hash_str, "hash_str");
@@ -1466,11 +1463,10 @@ exec_parse_message(const char *query_string,	/* string to execute */
 
       char hash_str_copy[1024];
       strcpy(hash_str_copy, hash_str);
-      if (CheckQuery(hash_str_copy)) {
-        stmt_exists = true;
-      }
+      adhoc_stmt_exists = CheckQuery(hash_str_copy);
 
       numParams = list_length(params);
+      // Silent Postgres checking
       paramTypes = (Oid *) palloc(sizeof(Oid) * numParams);
       for (i = 0; i < numParams; i++)
       {
@@ -1480,8 +1476,6 @@ exec_parse_message(const char *query_string,	/* string to execute */
       // Update thread local variables
       cache_adhoc = true;
       strcpy(adhoc_stmt_name, hash_str);
-      adhoc_stmt_num_params = numParams;
-      adhoc_stmt_param_types = paramTypes;
       adhoc_stmt_arg_types = argtypes;
       adhoc_stmt_param_list = params;
     } else {
@@ -1514,52 +1508,58 @@ exec_parse_message(const char *query_string,	/* string to execute */
      * Create the CachedPlanSource before we do parse analysis, since it
      * needs to see the unmodified raw parse tree.
      */
-    psrc = CreateCachedPlan(raw_parse_tree, query_string, commandTag);
+    if (!adhoc_stmt_exists) {
+      psrc = CreateCachedPlan(raw_parse_tree, query_string, commandTag);
 
-    /*
-     * Set up a snapshot if parse analysis will need one.
-     */
-    if (analyze_requires_snapshot(raw_parse_tree))
-    {
-      PushActiveSnapshot(GetTransactionSnapshot());
-      snapshot_set = true;
+      /*
+       * Set up a snapshot if parse analysis will need one.
+       */
+      if (analyze_requires_snapshot(raw_parse_tree))
+      {
+        PushActiveSnapshot(GetTransactionSnapshot());
+        snapshot_set = true;
+      }
+
+      /*
+       * Analyze and rewrite the query.  Note that the originally specified
+       * parameter set is not required to be complete, so we have to use
+       * parse_analyze_varparams().
+       */
+      if (log_parser_stats)
+        ResetUsage();
+
+      query = parse_analyze_varparams(raw_parse_tree,
+                                      query_string,
+                                      &paramTypes,
+                                      &numParams);
+
+      /*
+       * Check all parameter types got determined.
+       */
+      for (i = 0; i < numParams; i++)
+      {
+        Oid			ptype = paramTypes[i];
+
+        if (ptype == InvalidOid || ptype == UNKNOWNOID)
+          ereport(ERROR,
+                  (errcode(ERRCODE_INDETERMINATE_DATATYPE),
+                      errmsg("could not determine data type of parameter $%d",
+                             i + 1)));
+      }
+
+      if (log_parser_stats)
+        ShowUsage("PARSE ANALYSIS STATISTICS");
+
+      querytree_list = pg_rewrite_query(query);
+
+      /* Done with the snapshot used for parsing */
+      if (snapshot_set)
+        PopActiveSnapshot();
+
+    } else {
+      psrc = NULL;
+      querytree_list = NIL;
     }
-
-    /*
-     * Analyze and rewrite the query.  Note that the originally specified
-     * parameter set is not required to be complete, so we have to use
-     * parse_analyze_varparams().
-     */
-    if (log_parser_stats)
-      ResetUsage();
-
-    query = parse_analyze_varparams(raw_parse_tree,
-                                    query_string,
-                                    &paramTypes,
-                                    &numParams);
-
-    /*
-     * Check all parameter types got determined.
-     */
-    for (i = 0; i < numParams; i++)
-    {
-      Oid			ptype = paramTypes[i];
-
-      if (ptype == InvalidOid || ptype == UNKNOWNOID)
-        ereport(ERROR,
-                (errcode(ERRCODE_INDETERMINATE_DATATYPE),
-                    errmsg("could not determine data type of parameter $%d",
-                           i + 1)));
-    }
-
-    if (log_parser_stats)
-      ShowUsage("PARSE ANALYSIS STATISTICS");
-
-    querytree_list = pg_rewrite_query(query);
-
-    /* Done with the snapshot used for parsing */
-    if (snapshot_set)
-      PopActiveSnapshot();
   }
   else
   {
@@ -1576,19 +1576,20 @@ exec_parse_message(const char *query_string,	/* string to execute */
    * circular subgraph.  Klugy, but less so than flipping contexts even more
    * above.
    */
-  if (unnamed_stmt_context)
+  if (unnamed_stmt_context && !adhoc_stmt_exists)
     MemoryContextSetParent(psrc->context, MessageContext);
 
   /* Finish filling in the CachedPlanSource */
-  CompleteCachedPlan(psrc,
-                     querytree_list,
-                     unnamed_stmt_context,
-                     paramTypes,
-                     numParams,
-                     NULL,
-                     NULL,
-                     0,		/* default cursor options */
-                     true);	/* fixed result */
+  if (!adhoc_stmt_exists)
+    CompleteCachedPlan(psrc,
+                       querytree_list,
+                       unnamed_stmt_context,
+                       paramTypes,
+                       numParams,
+                       NULL,
+                       NULL,
+                       0,		/* default cursor options */
+                       true);	/* fixed result */
 
   /* If we got a cancel signal during analysis, quit */
   CHECK_FOR_INTERRUPTS();
@@ -1600,7 +1601,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
      */
     if (cache_adhoc)
     {
-      if (!stmt_exists)
+      if (!adhoc_stmt_exists)
         StorePreparedStatement(adhoc_stmt_name, psrc, false);
     }
     else
@@ -1752,9 +1753,9 @@ exec_bind_message(StringInfo input_message)
   numParams = pq_getmsgint(input_message, 2);
 
   if (cache_adhoc) {
-    numParams = adhoc_stmt_num_params;
+    numParams = list_length(adhoc_stmt_param_list);
     // Silent warning message
-    numPFormats = adhoc_stmt_num_params;
+    numPFormats = numParams;
   }
 
   if (numPFormats > 1 && numPFormats != numParams)
