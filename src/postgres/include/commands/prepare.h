@@ -43,6 +43,8 @@ extern void DeallocateQuery(DeallocateStmt *stmt);
 extern void ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into,
 					ExplainState *es,
 					const char *queryString, ParamListInfo params);
+extern ParamListInfo EvaluateParams(PreparedStatement *pstmt, List *params,
+			   const char *queryString, EState *estate);
 
 /* Low-level access to stored prepared statements */
 bool CheckQuery(const char *stmt_name);
