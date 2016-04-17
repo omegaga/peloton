@@ -915,15 +915,12 @@ extract_params_value(A_Const *expr, List **params, List **argtypes)
       typeOid = 401;
     } break;
     case T_String: {
-      // TODO: check if the value is correct
       typeOid = 1043;
     } break;
     case T_BitString: {
-      // TODO: check if the value is correct
       typeOid = 1562;
     } break;
     case T_Null: {
-      // TODO: check if the value is correct
       typeOid = 0;
     } break;
     default: {
@@ -1842,68 +1839,6 @@ exec_bind_message(StringInfo input_message)
       adhoc_stmt_estate->es_param_list_info = params;
       params = EvaluateParams(pstmt, adhoc_stmt_param_list,
           query_string, adhoc_stmt_estate);
-      // int paramno;
-      // ListCell *arg_item;
-      // ListCell *param_item;
-
-      // params = (ParamListInfo) palloc(offsetof(ParamListInfoData, params) +
-      //                                 numParams * sizeof(ParamExternData));
-
-      // params->paramFetch = NULL;
-      // params->paramFetchArg = NULL;
-      // params->parserSetup = NULL;
-      // params->parserSetupArg = NULL;
-      // params->numParams = numParams;
-
-      // // Fill in param type metadata
-      // paramno = 0;
-      // foreach (arg_item, adhoc_stmt_arg_types)
-      // {
-      //   TypeName *arg = (TypeName *) lfirst(arg_item);
-      //   params->params[paramno].isnull = (arg->typeOid == 0);
-      //   /*
-      //    * We mark the params as CONST.  This ensures that any custom plan
-      //    * makes full use of the parameter values.
-      //    */
-      //   params->params[paramno].pflags = PARAM_FLAG_CONST;
-      //   params->params[paramno].ptype = arg->typeOid;
-
-      //   paramno++;
-      // }
-      // // Fill in param values
-      // paramno = 0;
-      // foreach (param_item, adhoc_stmt_param_list)
-      // {
-      //   A_Const *param = (A_Const *) lfirst(param_item);
-      //   // TODO: only can handle int now!
-      //   switch (param->val.type) {
-      //     case T_Integer: {
-      //       params->params[paramno].value = intVal(&(param->val));
-      //     } break;
-      //     case T_Float: {
-      //       params->params[paramno].value = Float8GetDatum(
-      //           floatVal(&(param->val)));
-      //     } break;
-      //     case T_String: {
-      //       // TODO: check if the value is correct
-      //       params->params[paramno].value = (Datum) strVal(&(param->val));
-      //     } break;
-      //     case T_BitString: {
-      //       // TODO: check if the value is correct
-      //       params->params[paramno].value = (Datum) strVal(&(param->val));
-      //     } break;
-      //     case T_Null: {
-      //       params->params[paramno].value = 0;
-      //     } break;
-      //     default: {
-      //       // Should not be in this branch
-      //       // TODO: change to Postgres style ereport
-      //       Assert(false);
-      //     }
-      //   }
-
-      //   paramno++;
-      // }
     }
     else {
       params = NULL;
