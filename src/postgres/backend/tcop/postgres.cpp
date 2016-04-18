@@ -163,7 +163,6 @@ thread_local static bool ignore_till_sync = false;
 thread_local static CachedPlanSource *unnamed_stmt_psrc = NULL;
 thread_local static bool cache_adhoc = true;
 thread_local static char adhoc_stmt_name[1024];
-thread_local static List *adhoc_stmt_arg_types = NIL;
 thread_local static List *adhoc_stmt_param_list = NIL;
 thread_local static EState *adhoc_stmt_estate = NULL;
 
@@ -891,52 +890,13 @@ pg_plan_queries(List *querytrees, int cursorOptions, ParamListInfo boundParams)
 }
 
 static void
-extract_params_where(const Node *whereClause, List **params, List **argtypes);
+extract_params_where(const Node *whereClause, List **params);
 
 static void
-extract_params(const Node *parsetree, List **params, List **argtypes);
+extract_params(const Node *parsetree, List **params);
 
 static void
-extract_params_value(A_Const *expr, List **params, List **argtypes)
-{
-  // Add to params
-  *params = lappend(*params, expr);
-
-  TypeName *typeName = makeNode(TypeName);
-  typeName->names = NIL;
-
-  Oid typeOid = 0;
-
-  switch (expr->val.type) {
-    case T_Integer: {
-      typeOid = 23;
-    } break;
-    case T_Float: {
-      typeOid = 401;
-    } break;
-    case T_String: {
-      typeOid = 1043;
-    } break;
-    case T_BitString: {
-      typeOid = 1562;
-    } break;
-    case T_Null: {
-      typeOid = 0;
-    } break;
-    default: {
-      // Should not be in this branch
-      // TODO: change to Postgres style ereport
-      Assert(false);
-    }
-  }
-
-  // Generate type name
-  typeName->typeOid = typeOid;
-  *argtypes = lappend(*argtypes, typeName);
-}
-
-static void
-extract_params_where(const Node *whereClause, List **params, List **argtypes)
+extract_params_where(const Node *whereClause, List **params)
 {
   Assert(whereClause != NIL);
   switch (whereClause->type) {
@@ -945,9 +905,9 @@ extract_params_where(const Node *whereClause, List **params, List **argtypes)
 
       // Check if left expression is a constant
       if (a_expr->lexpr->type == T_A_Const) {
-        // Extract constant and append to params and argtypes
+        // Extract constant and append to params
         A_Const *lexpr = (A_Const *) a_expr->lexpr;
-        extract_params_value(lexpr, params, argtypes);
+        *params = lappend(*params, lexpr);
 
         // Change original constant to argument
         ParamRef *paramRef = makeNode(ParamRef);
@@ -957,9 +917,9 @@ extract_params_where(const Node *whereClause, List **params, List **argtypes)
 
       // Check if left expression is a constant
       if (a_expr->rexpr->type == T_A_Const) {
-        // Extract constant and append to params and argtypes
+        // Extract constant and append to params
         A_Const *rexpr = (A_Const *) a_expr->rexpr;
-        extract_params_value(rexpr, params, argtypes);
+        *params = lappend(*params, rexpr);
 
         // Change original constant to argument
         ParamRef *paramRef = makeNode(ParamRef);
@@ -973,13 +933,13 @@ extract_params_where(const Node *whereClause, List **params, List **argtypes)
       // Evaluate all arguments
       foreach (arg, boolExpr->args) {
         Node * arg_node = (Node *) lfirst(arg);
-        extract_params_where(arg_node, params, argtypes);
+        extract_params_where(arg_node, params);
       }
     } break;
     case T_SubLink: {
       SubLink *subLink = (SubLink *) whereClause;
       Assert(subLink->subselect != NIL);
-      extract_params(subLink->subselect, params, argtypes);
+      extract_params(subLink->subselect, params);
     } break;
     default: {
       return;
@@ -988,14 +948,14 @@ extract_params_where(const Node *whereClause, List **params, List **argtypes)
 }
 
 static void
-extract_params(const Node *parsetree, List **params, List **argtypes)
+extract_params(const Node *parsetree, List **params)
 {
   Assert(parsetree->type == T_SelectSmtmt);
   SelectStmt *selectStmt = (SelectStmt *) parsetree;
 
   Node *whereClause = selectStmt->whereClause;
   if (whereClause != NIL)
-    extract_params_where(whereClause, params, argtypes);
+    extract_params_where(whereClause, params);
 }
 
 /*
@@ -1113,8 +1073,7 @@ exec_simple_query(const char *query_string)
 
     if (IsA(parsetree, SelectStmt)) {
       List *params = NIL;
-      List *argtypes = NIL;
-      extract_params(parsetree, &params, &argtypes);
+      extract_params(parsetree, &params);
 
       char *queryString = nodeToString(parsetree);
       int32_t hash = peloton::MurmurHash3_x64_128(queryString, strlen(queryString), 0);
@@ -1129,7 +1088,7 @@ exec_simple_query(const char *query_string)
         PrepareStmt *prepareStmt = makeNode(PrepareStmt);
         prepareStmt->name = hash_str;
         prepareStmt->query = parsetree;
-        prepareStmt->argtypes = argtypes;
+        prepareStmt->argtypes = NIL;
         PrepareQuery(prepareStmt, hash_str_copy);
       }
 
@@ -1448,8 +1407,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 
     if (enable_adhoc_cache && !is_named && IsA(raw_parse_tree, SelectStmt)) {
       List *params = NIL;
-      List *argtypes = NIL;
-      extract_params(raw_parse_tree, &params, &argtypes);
+      extract_params(raw_parse_tree, &params);
 
       char *queryString = nodeToString(raw_parse_tree);
       int32_t hash = peloton::MurmurHash3_x64_128(queryString,
@@ -1474,7 +1432,6 @@ exec_parse_message(const char *query_string,	/* string to execute */
       // Update thread local variables
       cache_adhoc = true;
       strcpy(adhoc_stmt_name, hash_str);
-      adhoc_stmt_arg_types = argtypes;
       adhoc_stmt_param_list = params;
     } else {
       cache_adhoc = false;
