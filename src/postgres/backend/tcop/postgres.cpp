@@ -890,54 +890,51 @@ pg_plan_queries(List *querytrees, int cursorOptions, ParamListInfo boundParams)
 }
 
 static void
-extract_params_where(const Node *whereClause, List **params);
+extract_params_where(Node **whereClause, List **params);
 
 static void
 extract_params(const Node *parsetree, List **params);
 
 static void
-extract_params_where(const Node *whereClause, List **params)
+extract_params_where(Node **node_ptr, List **params)
 {
-  Assert(whereClause != NIL);
-  switch (whereClause->type) {
+  const Node *node = *node_ptr;
+  Assert(node != NIL);
+  switch (node->type) {
+    case T_A_Const: {
+      // Extract constant and append to params
+      A_Const *expr = (A_Const *) node;
+      *params = lappend(*params, expr);
+
+      // Change original constant to argument
+      ParamRef *paramRef = makeNode(ParamRef);
+      paramRef->number = list_length(*params);
+      *node_ptr = paramRef;
+    } break;
     case T_A_Expr: {
-      A_Expr *a_expr = (A_Expr *) whereClause;
+      A_Expr *aExpr = (A_Expr *) node;
 
       // Check if left expression is a constant
-      if (a_expr->lexpr->type == T_A_Const) {
-        // Extract constant and append to params
-        A_Const *lexpr = (A_Const *) a_expr->lexpr;
-        *params = lappend(*params, lexpr);
-
-        // Change original constant to argument
-        ParamRef *paramRef = makeNode(ParamRef);
-        paramRef->number = list_length(*params);
-        a_expr->lexpr = paramRef;
+      if (aExpr->lexpr->type == T_A_Const) {
+        extract_params_where(&(aExpr->lexpr), params);
       }
 
       // Check if left expression is a constant
-      if (a_expr->rexpr->type == T_A_Const) {
-        // Extract constant and append to params
-        A_Const *rexpr = (A_Const *) a_expr->rexpr;
-        *params = lappend(*params, rexpr);
-
-        // Change original constant to argument
-        ParamRef *paramRef = makeNode(ParamRef);
-        paramRef->number = list_length(*params);
-        a_expr->rexpr = paramRef;
+      if (aExpr->rexpr->type == T_A_Const) {
+        extract_params_where(&(aExpr->rexpr), params);
       }
     } break;
     case T_BoolExpr: {
-      BoolExpr *boolExpr = (BoolExpr *) whereClause;
+      BoolExpr *boolExpr = (BoolExpr *) node;
       ListCell *arg;
       // Evaluate all arguments
       foreach (arg, boolExpr->args) {
         Node * arg_node = (Node *) lfirst(arg);
-        extract_params_where(arg_node, params);
+        extract_params_where(&arg_node, params);
       }
     } break;
     case T_SubLink: {
-      SubLink *subLink = (SubLink *) whereClause;
+      SubLink *subLink = (SubLink *) node;
       Assert(subLink->subselect != NIL);
       extract_params(subLink->subselect, params);
     } break;
@@ -955,7 +952,7 @@ extract_params(const Node *parsetree, List **params)
 
   Node *whereClause = selectStmt->whereClause;
   if (whereClause != NIL)
-    extract_params_where(whereClause, params);
+    extract_params_where(&whereClause, params);
 }
 
 /*
