@@ -911,27 +911,28 @@ extract_params_where(Node **node_ptr, List **params)
       paramRef->number = list_length(*params);
       *node_ptr = paramRef;
     } break;
+    case T_List: {
+      List * list = (List *) node;
+      ListCell *arg;
+      foreach (arg, list) {
+        Node *arg_node = (Node *) lfirst(arg);
+        extract_params_where(&arg_node, params);
+        arg->data.ptr_value = (void *) arg_node;
+      }
+    } break;
     case T_A_Expr: {
       A_Expr *aExpr = (A_Expr *) node;
 
       // Check if left expression is a constant
-      if (aExpr->lexpr->type == T_A_Const) {
-        extract_params_where(&(aExpr->lexpr), params);
-      }
+      extract_params_where(&(aExpr->lexpr), params);
 
-      // Check if left expression is a constant
-      if (aExpr->rexpr->type == T_A_Const) {
-        extract_params_where(&(aExpr->rexpr), params);
-      }
+      // Check if right expression is a constant
+      extract_params_where(&(aExpr->rexpr), params);
     } break;
     case T_BoolExpr: {
       BoolExpr *boolExpr = (BoolExpr *) node;
-      ListCell *arg;
-      // Evaluate all arguments
-      foreach (arg, boolExpr->args) {
-        Node * arg_node = (Node *) lfirst(arg);
-        extract_params_where(&arg_node, params);
-      }
+      Node *args_node = boolExpr->args;
+      extract_params_where(&args_node, params);
     } break;
     case T_SubLink: {
       SubLink *subLink = (SubLink *) node;
