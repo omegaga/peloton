@@ -6,7 +6,8 @@
 #include "cache.h"
 #include "portal.h"
 #include "cache_entry.h"
-#include "types.h"
+#include "backend/common/types.h"
+#include "backend/common/value_factory.h"
 #include <stdio.h>
 #include <boost/algorithm/string.hpp>
 #include <unordered_map>
@@ -169,47 +170,6 @@ void PacketManager::send_data_rows(std::vector<wiredb::ResType> &results,
   }
   rows_affected = numrows;
   LOG_INFO("Rows affected: %d", rows_affected);
-}
-
-/*
- * put_dummy_row_desc - Prepare a dummy row description packet
- */
-void PacketManager::put_dummy_row_desc(ResponseBuffer& responses) {
-  std::unique_ptr<Packet> pkt(new Packet());
-  pkt->msg_type = 'T';
-  packet_putint(pkt, 5, 2);
-
-  for (int i = 0; i < 5; i++) {
-    auto field = "F" + std::to_string(i);
-    packet_putstring(pkt, field);
-    packet_putint(pkt, 0, 4);
-    packet_putint(pkt, 0, 2);
-    packet_putint(pkt, 0, 4);
-    packet_putint(pkt, 10, 2);
-    packet_putint(pkt, -1, 4);
-    // format code for text
-    packet_putint(pkt, 0, 2);
-  }
-
-  responses.push_back(std::move(pkt));
-}
-
-void PacketManager::put_dummy_data_row(int colcount, int start,
-                                       ResponseBuffer& responses) {
-  std::unique_ptr<Packet> pkt(new Packet());
-  std::string data;
-  pkt->msg_type = 'D';
-  packet_putint(pkt, colcount, 2);
-  for (int i = 0; i < colcount; i++) {
-    data = "row" + std::to_string(start + i);
-
-    // add 1 for null-terminator
-    packet_putint(pkt, data.length() + 1, 4);
-
-    packet_putstring(pkt, data);
-  }
-
-  responses.push_back(std::move(pkt));
 }
 
 std::string get_query_type(std::string query) {
@@ -460,8 +420,8 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
         LOG_INFO("TEXT mode");
         std::string param_str = std::string(std::begin(param),
             std::end(param));
-        bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
         LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
+        bind_parameters.push_back(std::make_pair(WIRE_TEXT, std::move(param_str)));
       } else {
         // BINARY mode
         LOG_INFO("BINARY mode");
@@ -471,8 +431,9 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
             for (size_t i = 0; i < sizeof(int); ++i) {
               int_val = (int_val << 8) | param[i];
             }
+            std::string int_str = std::to_string(int_val);
             bind_parameters.push_back(
-                std::make_pair(WIRE_INTEGER, std::to_string(int_val)));
+                std::make_pair(WIRE_INTEGER, std::move(int_str)));
             LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
           }
             break;
@@ -483,8 +444,9 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
               buf = (buf << 8) | param[i];
             }
             memcpy(&float_val, &buf, sizeof(double));
+            std::string float_str = std::to_string(float_val);
             bind_parameters.push_back(
-                std::make_pair(WIRE_FLOAT, std::to_string(float_val)));
+                std::make_pair(WIRE_FLOAT, std::move(float_str)));
             LOG_INFO("Bind param (size: %d) : %lf", param_len, float_val);
           }
             break;

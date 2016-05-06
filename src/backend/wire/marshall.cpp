@@ -3,11 +3,11 @@
 //
 
 #include "marshall.h"
+#include "backend/common/logger.h"
 #include <netinet/in.h>
 #include <algorithm>
 #include <cstring>
 #include <iterator>
-#include "logger.h"
 
 namespace peloton {
 namespace wire {
