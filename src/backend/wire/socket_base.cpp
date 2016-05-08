@@ -4,6 +4,7 @@
 
 #include "socket_base.h"
 #include <stdlib.h>
+#include <sys/time.h>
 
 namespace peloton {
 namespace wire {
@@ -149,10 +150,14 @@ bool SocketManager<B>::read_bytes(B &pkt_buf, size_t bytes) {
       }
 
       // refill buffer, reset buf ptr here
+      struct timeval ts, te;
+      gettimeofday(&ts, NULL);
       if (!refill_read_buffer()) {
         // nothing more to read, end
         return false;
       }
+      gettimeofday(&te, NULL);
+    printf("wait took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
     }
   }
 

@@ -7,8 +7,9 @@
 
 #include "database.h"
 #include <stdlib.h>
-#include <sqlite3.h>
+#include "sqlite3.h"
 #include <stdio.h>
+#include <sys/time.h>
 
 namespace peloton {
 namespace wiredb {
@@ -109,7 +110,7 @@ public:
           size_t str_len = wire_val.size();
           LOG_INFO("BIND TEXT: %s", str_val);
           rc = sqlite3_bind_text(*stmt, paramno, str_val, (int) str_len,
-                                 SQLITE_TRANSIENT);
+                                 SQLITE_STATIC);
         } break;
 
         case WIRE_NULL: {
@@ -175,6 +176,8 @@ public:
   int ExecPrepStmt(void *stmt, bool unnamed, std::vector<ResType> &res,
                    int &rows_change,
                    std::string &err_msg) {
+  struct timeval te, ts;
+  gettimeofday(&ts, NULL);
 
     LOG_INFO("Executing statement......................");
     auto sql_stmt = (sqlite3_stmt *)stmt;
@@ -219,7 +222,8 @@ public:
       sqlite3_finalize(sql_stmt);
     else
       sqlite3_reset(sql_stmt);
-    sqlite3_db_release_memory(db);
+    // TODO: release memory when closing connection
+    //sqlite3_db_release_memory(db);
     // sql_stmt = nullptr;
     if (ret != SQLITE_DONE) {
       LOG_INFO("ret num %d, err is %s", ret, sqlite3_errmsg(db));
@@ -227,6 +231,9 @@ public:
       return 1;
     }
     rows_change = sqlite3_changes(db);
+    gettimeofday(&te, NULL);
+    // TODO: delete it!!!!!!!!!!!!!!!!!!
+    printf("took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
     return 0;
   }
 
@@ -279,16 +286,13 @@ private:
       res.clear();
   }
 
-  static inline void copyFromTo(const char *src, std::vector<unsigned char> &dst) {
+  static inline void copyFromTo(const char *src,
+                                std::vector<unsigned char> &dst) {
     if (src == nullptr) {
       return;
     }
-    //LOG_INFO("ENTER: strlen: %zu", strlen(src));
     size_t len = strlen(src);
-    for(unsigned int i = 0; i < len; i++){
-      dst.push_back((unsigned char)src[i]);
-    }
-    //LOG_INFO("EXIT: strlen: %zu", strlen(src));
+    dst.insert(dst.end(), src, src + len);
   }
 
   static int execCallback(void *res, int argc, char **argv, char **azColName){

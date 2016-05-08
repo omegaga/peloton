@@ -24,7 +24,7 @@ public class PelotonTest {
           "COMMIT;";
 
   private final String SEQSCAN = "SELECT * FROM A";
-  private final String INDEXSCAN = "SELECT * FROM A WHERE id = ?";
+  private final String INDEXSCAN = "SELECT * FROM USERTABLE WHERE YCSB_KEY = ?";
   private final String BITMAPSCAN = "SELECT * FROM A WHERE id > ? and id < ?";
   private final String UPDATE_BY_INDEXSCAN = "UPDATE A SET data=? WHERE id=?";
   private final String UPDATE_BY_SCANSCAN = "UPDATE A SET data=?";
@@ -64,10 +64,10 @@ public class PelotonTest {
    */
   public void Init() throws SQLException {
     conn.setAutoCommit(true);
-    Statement stmt = conn.createStatement();
-    stmt.execute(DROP);
-    stmt.execute(DDL);
-    System.out.println("Test db created.");
+    //Statement stmt = conn.createStatement();
+    //stmt.execute(DROP);
+    //stmt.execute(DDL);
+    //System.out.println("Test db created.");
   }
 
   /**
@@ -161,12 +161,16 @@ public class PelotonTest {
     System.out.println("\nIndexScan Test: ? = " + i);
     System.out.println("Query: " + INDEXSCAN);
     PreparedStatement stmt = conn.prepareStatement(INDEXSCAN);
-    stmt.setInt(1, i);
-    ResultSet r = stmt.executeQuery();
-    while (r.next()) {
-      System.out.println("IndexScanTest got tuple: id: " + r.getString(1) + ", data: " + r.getString(2));
+    long time = System.currentTimeMillis();
+    for (int z = 0; z < 100; ++z) {
+      stmt.setInt(1, i);
+      ResultSet r = stmt.executeQuery();
+      while (r.next()) {
+        //System.out.println("IndexScanTest got tuple: id: " + r.getString(1) + ", data: " + r.getString(2));
+      }
+      r.close();
     }
-    r.close();
+    System.out.println(System.currentTimeMillis() - time);
   }
 
   /**
@@ -258,14 +262,14 @@ public class PelotonTest {
     PelotonTest pt = new PelotonTest();
     pt.Init();
     //pt.Insert(3, TABLE.A);
-    pt.Insert(20);
+    //pt.Insert(20);
     //pt.ReadModifyWrite(3);
     //pt.BitmapScan(2, 5);
     //pt.SeqScan();
     //pt.DeleteByIndexScan(3);
     //pt.SeqScan();
     //pt.UpdateBySeqScan();
-    //pt.IndexScan(3);
+    pt.IndexScan(3);
     pt.Close();
   }
 }

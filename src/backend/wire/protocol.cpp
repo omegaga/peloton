@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <boost/algorithm/string.hpp>
 #include <unordered_map>
+#include <sys/time.h>
 
 #define PROTO_MAJOR_VERSION(x) x >> 16
 
@@ -18,12 +19,11 @@ namespace peloton {
 namespace wire {
 
 thread_local Cache<std::string, CacheEntry> cache_;
-thread_local std::unordered_map<std::string, std::shared_ptr<Portal>> portals_;
+thread_local std::unordered_map<std::string, std::unique_ptr<Portal>> portals_;
 
 const std::unordered_map<std::string, std::string> PacketManager::parameter_status_map =
   boost::assign::map_list_of ("application_name","psql")("client_encoding", "UTF8")
-  ("DateStyle", "ISO, MDY")("integer_datetimes", "on")
-  ("IntervalStyle", "postgres")("is_superuser", "on")
+  ("DateStyle", "ISO, MDY")("integer_datetimes", "on") ("IntervalStyle", "postgres")("is_superuser", "on")
   ("server_encoding", "UTF8")("server_version", "9.5devel")
   ("session_authorization", "postgres")("standard_conforming_strings", "on")
   ("TimeZone", "US/Eastern");
@@ -71,40 +71,40 @@ void PacketManager::make_hardcoded_parameter_status(
  * process_startup_packet - Processes the startup packet
  * 	(after the size field of the header).
  */
-bool PacketManager::process_startup_packet(Packet* pkt,
+bool PacketManager::process_startup_packet(Packet* pkt UNUSED,
                                            ResponseBuffer& responses) {
   std::string token, value;
   std::unique_ptr<Packet> response(new Packet());
 
-  int32_t proto_version = packet_getint(pkt, sizeof(int32_t));
+  //int32_t proto_version = packet_getint(pkt, sizeof(int32_t));
 
-  if (PROTO_MAJOR_VERSION(proto_version) != 3) {
-    LOG_ERROR("Protocol error: Only protocol version 3 is supported.");
-    exit(EXIT_FAILURE);
-  }
+  //if (PROTO_MAJOR_VERSION(proto_version) != 3) {
+    //LOG_ERROR("Protocol error: Only protocol version 3 is supported.");
+    //exit(EXIT_FAILURE);
+  //}
 
-  // TODO: check for more malformed cases
-  // iterate till the end
-  for (;;) {
-    // loop end case?
-    if (pkt->ptr >= pkt->len) break;
-    get_string_token(pkt, token);
+  //// TODO: check for more malformed cases
+  //// iterate till the end
+  //for (;;) {
+    //// loop end case?
+    //if (pkt->ptr >= pkt->len) break;
+    //get_string_token(pkt, token);
 
-    // if the option database was found
-    if (token.compare("database") == 0) {
-      // loop end?
-      if (pkt->ptr >= pkt->len) break;
-      get_string_token(pkt, client.dbname);
-    } else if (token.compare(("user")) == 0) {
-      // loop end?
-      if (pkt->ptr >= pkt->len) break;
-      get_string_token(pkt, client.user);
-    } else {
-      if (pkt->ptr >= pkt->len) break;
-      get_string_token(pkt, value);
-      client.cmdline_options[token] = value;
-    }
-  }
+    //// if the option database was found
+    //if (token.compare("database") == 0) {
+      //// loop end?
+      //if (pkt->ptr >= pkt->len) break;
+      //get_string_token(pkt, client.dbname);
+    //} else if (token.compare(("user")) == 0) {
+      //// loop end?
+      //if (pkt->ptr >= pkt->len) break;
+      //get_string_token(pkt, client.user);
+    //} else {
+      //if (pkt->ptr >= pkt->len) break;
+      //get_string_token(pkt, value);
+      //client.cmdline_options[token] = value;
+    //}
+  //}
 
   // send auth-ok
   response->msg_type = 'R';
@@ -339,6 +339,8 @@ void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
 }
 
 void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
+  struct timeval ts;
+  gettimeofday(&ts, NULL);
   std::string portal_name, prep_stmt_name;
   // BIND message
   LOG_INFO("BIND message");
@@ -468,19 +470,20 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
   }
 
   // TODO: replace this with a constructor
-  std::shared_ptr<Portal> portal(new Portal());
+  std::unique_ptr<Portal> portal(new Portal());
   portal->query_string = query_string;
   portal->stmt = stmt;
   portal->prep_stmt_name = prep_stmt_name;
   portal->portal_name = portal_name;
   portal->query_type = query_type;
+  portal->parameters = std::move(bind_parameters);
+  portal->ts = ts;
 
   auto itr = portals_.find(portal_name);
   if (itr == portals_.end()) {
-    portals_.insert(std::make_pair(portal_name, portal));
+    portals_.insert(std::make_pair(portal_name, std::move(portal)));
   } else {
-    std::shared_ptr<Portal> p = itr->second;
-    itr->second = portal;
+    itr->second = std::move(portal);
   }
 
   //send bind complete
@@ -506,9 +509,9 @@ void PacketManager::exec_describe_message(Packet *pkt,
       put_row_desc(rowdesc, responses);
       return;
     }
-    std::shared_ptr<Portal> p = portal_itr->second;
-    db.GetRowDesc(p->stmt, p->rowdesc);
-    put_row_desc(p->rowdesc, responses);
+    const auto &portal = portal_itr->second;
+    db.GetRowDesc(portal->stmt, portal->rowdesc);
+    put_row_desc(portal->rowdesc, responses);
   } else if (mode[0] == 'S') {
     // TODO: need to handle this case
   } else {
@@ -534,7 +537,7 @@ void PacketManager::exec_execute_message(Packet *pkt,
     return;
   }
 
-  auto portal = portals_[portal_name];
+  const auto &portal = portals_[portal_name];
   const auto &query_string = portal->query_string;
   const auto &query_type = portal->query_type;
   stmt = portal->stmt;
@@ -551,6 +554,7 @@ void PacketManager::exec_execute_message(Packet *pkt,
   }
 
   is_failed = db.ExecPrepStmt(stmt, unnamed, results, rows_affected, err_msg);
+
   if (is_failed) {
     LOG_INFO("Failed to execute: %s", err_msg.c_str());
     send_error_response({{'M', err_msg}}, responses);
@@ -563,9 +567,14 @@ void PacketManager::exec_execute_message(Packet *pkt,
     globals.sqlite_mutex.unlock();
   }
 
-  //put_row_desc(portal->rowdesc, responses);
   send_data_rows(results, results.size(), rows_affected, responses);
   complete_command(query_type, rows_affected, responses);
+
+  struct timeval te;
+  gettimeofday(&te, NULL);
+  // TODO: delete it!!!!!!!!!!!!!!!!!!
+  printf("took %lu %lu\n", te.tv_sec - portal->ts.tv_sec, te.tv_usec - portal->ts.tv_usec);
+  printf("time now %lu %lu\n", te.tv_sec, te.tv_usec);
 }
 
 /*
@@ -573,6 +582,8 @@ void PacketManager::exec_execute_message(Packet *pkt,
  *  Returns false if the seesion needs to be closed.
  */
 bool PacketManager::process_packet(Packet* pkt, ThreadGlobals& globals, ResponseBuffer& responses) {
+  struct timeval ts, te;
+  gettimeofday(&ts, NULL);
   switch (pkt->msg_type) {
     case 'Q': {
       exec_query_message(pkt, responses);
@@ -597,10 +608,14 @@ bool PacketManager::process_packet(Packet* pkt, ThreadGlobals& globals, Response
       LOG_INFO("Closing client");
       return false;
     } break;
+    // TODO: add support for close ('C') message
     default: {
       LOG_INFO("Packet type not supported yet: %d (%c)", pkt->msg_type, pkt->msg_type);
     }
   }
+  gettimeofday(&te, NULL);
+  // TODO: delete it!!!!!!!!!!!!!!!!!!
+  printf("%c took %lu %lu\n", pkt->msg_type, te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
   return true;
 }
 
@@ -641,6 +656,7 @@ void PacketManager::send_ready_for_query(uchar txn_status,
  * 		Always return with a closed socket.
  */
 void PacketManager::manage_packets(ThreadGlobals& globals) {
+  struct timeval ts, te;
   Packet pkt;
   ResponseBuffer responses;
   bool status;
@@ -660,7 +676,11 @@ void PacketManager::manage_packets(ThreadGlobals& globals) {
   }
 
   pkt.reset();
-  while (read_packet(&pkt, true, &client)) {
+  while (true) {
+    gettimeofday(&ts, NULL);
+    bool flag = read_packet(&pkt, true, &client);
+    if (!flag)
+      break;
     //print_packet(&pkt);
     status = process_packet(&pkt, globals, responses);
     if (!write_packets(responses, &client) || !status) {
@@ -669,6 +689,9 @@ void PacketManager::manage_packets(ThreadGlobals& globals) {
       return;
     }
     pkt.reset();
+    gettimeofday(&te, NULL);
+    // TODO: delete it!!!!!!!!!!!!!!!!!!
+    printf("manage_packet took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
   }
 }
 }
