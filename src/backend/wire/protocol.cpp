@@ -11,7 +11,6 @@
 #include <stdio.h>
 #include <boost/algorithm/string.hpp>
 #include <unordered_map>
-#include <sys/time.h>
 
 #define PROTO_MAJOR_VERSION(x) x >> 16
 
@@ -28,30 +27,6 @@ const std::unordered_map<std::string, std::string> PacketManager::parameter_stat
   ("session_authorization", "postgres")("standard_conforming_strings", "on")
   ("TimeZone", "US/Eastern");
 
-void print_packet(Packet* pkt UNUSED) {
-  // TODO: DELETE
-  if (pkt->msg_type) {
-    printf("MsgType: %d (%c)", pkt->msg_type, pkt->msg_type);
-  }
-
-  printf("Len: %zu", pkt->len);
-
-  printf("BufLen: %zu", pkt->buf.size());
-
-  printf("{");
-  for (auto ele UNUSED : pkt->buf) {
-    printf("%d (%c), ", ele, ele);
-  }
-  printf("}\n");
-}
-
-void print_uchar_vector(std::vector<uchar>& vec UNUSED) {
-  //  LOG_INFO("{");
-  //  for (auto ele : vec) {
-  //    LOG_INFO("%d (%c)", ele, ele);
-  //  }
-  //  LOG_INFO("}\n");
-}
 
 /*
  * close_client - Close the socket of the underlying client
@@ -77,35 +52,35 @@ bool PacketManager::process_startup_packet(Packet* pkt UNUSED,
   std::string token, value;
   std::unique_ptr<Packet> response(new Packet());
 
-  //int32_t proto_version = packet_getint(pkt, sizeof(int32_t));
+  int32_t proto_version = packet_getint(pkt, sizeof(int32_t));
 
-  //if (PROTO_MAJOR_VERSION(proto_version) != 3) {
-    //LOG_ERROR("Protocol error: Only protocol version 3 is supported.");
-    //exit(EXIT_FAILURE);
-  //}
+  if (PROTO_MAJOR_VERSION(proto_version) != 3) {
+    LOG_ERROR("Protocol error: Only protocol version 3 is supported.");
+    exit(EXIT_FAILURE);
+  }
 
-  //// TODO: check for more malformed cases
-  //// iterate till the end
-  //for (;;) {
-    //// loop end case?
-    //if (pkt->ptr >= pkt->len) break;
-    //get_string_token(pkt, token);
+  // iterate till the end
+  for (;;) {
+    // loop end case?
+    if (pkt->ptr >= pkt->len)
+      break;
+    get_string_token(pkt, token);
 
-    //// if the option database was found
-    //if (token.compare("database") == 0) {
-      //// loop end?
-      //if (pkt->ptr >= pkt->len) break;
-      //get_string_token(pkt, client.dbname);
-    //} else if (token.compare(("user")) == 0) {
-      //// loop end?
-      //if (pkt->ptr >= pkt->len) break;
-      //get_string_token(pkt, client.user);
-    //} else {
-      //if (pkt->ptr >= pkt->len) break;
-      //get_string_token(pkt, value);
-      //client.cmdline_options[token] = value;
-    //}
-  //}
+    // if the option database was found
+    if (token.compare("database") == 0) {
+      // loop end?
+      if (pkt->ptr >= pkt->len) break;
+      get_string_token(pkt, client.dbname);
+    } else if (token.compare(("user")) == 0) {
+      // loop end?
+      if (pkt->ptr >= pkt->len) break;
+      get_string_token(pkt, client.user);
+    } else {
+      if (pkt->ptr >= pkt->len) break;
+      get_string_token(pkt, value);
+      client.cmdline_options[token] = value;
+    }
+  }
 
   // send auth-ok
   response->msg_type = 'R';
@@ -132,9 +107,9 @@ void PacketManager::put_row_desc(std::vector<wiredb::FieldInfoType> &rowdesc, Re
   for (auto col : rowdesc) {
     LOG_INFO("column name: %s", std::get<0>(col).c_str());
     packet_putstring(pkt, std::get<0>(col));
-    // TODO: Table Oid (int32)
+
     packet_putint(pkt, 0, 4);
-    // TODO: Attr id of column (int16)
+
     packet_putint(pkt, 0, 2);
     // Field data type (int32)
     packet_putint(pkt, std::get<1>(col), 4);
@@ -225,7 +200,6 @@ bool PacketManager::hardcoded_execute_filter(std::string query_type) {
   return true;
 }
 
-// TODO: rewrite this method
 void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
   std::string q_str;
   packet_getstring(pkt, pkt->len, q_str);
@@ -262,10 +236,8 @@ void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
     }
 
     put_row_desc(rowdesc, responses);
-
     send_data_rows(results, rowdesc.size(), rows_affected, responses);
 
-    // TODO: should change to query_type
     complete_command(*query, rows_affected, responses);
   }
 
@@ -336,8 +308,6 @@ void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
 }
 
 void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
-  struct timeval ts;
-  gettimeofday(&ts, NULL);
   std::string portal_name, prep_stmt_name;
   // BIND message
   LOG_INFO("BIND message");
@@ -390,10 +360,6 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
   const auto &query_string = entry->query_string;
   const auto &query_type = entry->query_type;
 
-  // TODO: delete
-  //  if (prep_stmt_name.compare("S_3") == 0 || prep_stmt_name.compare("S_1") == 0){
-  //    printf("Stmt: %s\n", query_string.c_str());
-  //  }
 
   skipped_stmt_ = false;
   if (!hardcoded_execute_filter(query_type)) {
@@ -471,7 +437,6 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
     send_ready_for_query(txn_state, responses);
   }
 
-  // TODO: replace this with a constructor
   std::unique_ptr<Portal> portal(new Portal());
   portal->query_string = query_string;
   portal->stmt = stmt;
@@ -506,7 +471,6 @@ void PacketManager::exec_describe_message(Packet *pkt,
   if (mode[0] == 'P') {
     auto portal_itr = portals_.find(name);
     if (portal_itr == portals_.end()) {
-      // TODO: error handling here
       std::vector<wiredb::FieldInfoType> rowdesc;
       put_row_desc(rowdesc, responses);
       return;
@@ -514,10 +478,6 @@ void PacketManager::exec_describe_message(Packet *pkt,
     const auto &portal = portal_itr->second;
     db.GetRowDesc(portal->stmt, portal->rowdesc);
     put_row_desc(portal->rowdesc, responses);
-  } else if (mode[0] == 'S') {
-    // TODO: need to handle this case
-  } else {
-    // TODO: error handling here
   }
 }
 
@@ -571,15 +531,6 @@ void PacketManager::exec_execute_message(Packet *pkt,
 
   send_data_rows(results, results.size(), rows_affected, responses);
   complete_command(query_type, rows_affected, responses);
-
-  struct timeval te;
-  gettimeofday(&te, NULL);
-  // TODO: delete it!!!!!!!!!!!!!!!!!!
-  if (te.tv_usec - portal->ts.tv_usec > 500) {
-    printf("execute msg took %lu %lu (%s)\n", te.tv_sec - portal->ts.tv_sec,
-           te.tv_usec - portal->ts.tv_usec, portal->query_string.c_str());
-  }
-  // printf("time now %lu %lu\n", te.tv_sec, te.tv_usec);
 }
 
 /*
@@ -587,8 +538,6 @@ void PacketManager::exec_execute_message(Packet *pkt,
  *  Returns false if the seesion needs to be closed.
  */
 bool PacketManager::process_packet(Packet* pkt, ThreadGlobals& globals, ResponseBuffer& responses) {
-  struct timeval ts, te;
-  gettimeofday(&ts, NULL);
   switch (pkt->msg_type) {
     case 'Q': {
       exec_query_message(pkt, responses);
@@ -613,15 +562,11 @@ bool PacketManager::process_packet(Packet* pkt, ThreadGlobals& globals, Response
       LOG_INFO("Closing client");
       return false;
     } break;
-    // TODO: add support for close ('C') message
     default: {
       LOG_INFO("Packet type not supported yet: %d (%c)", pkt->msg_type, pkt->msg_type);
     }
   }
-  gettimeofday(&te, NULL);
-  // TODO: delete it!!!!!!!!!!!!!!!!!!
-  if (te.tv_usec - ts.tv_usec > 500)
-    printf("%c took %lu %lu\n", pkt->msg_type, te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
+
   return true;
 }
 
@@ -662,7 +607,6 @@ void PacketManager::send_ready_for_query(uchar txn_status,
  * 		Always return with a closed socket.
  */
 void PacketManager::manage_packets(ThreadGlobals& globals) {
-  struct timeval ts, te;
   Packet pkt;
   ResponseBuffer responses;
   bool status;
@@ -673,7 +617,6 @@ void PacketManager::manage_packets(ThreadGlobals& globals) {
     return;
   }
 
-  //print_packet(&pkt);
   status = process_startup_packet(&pkt, responses);
   if (!write_packets(responses, &client) || !status) {
     // close client on write failure or status failure
@@ -683,21 +626,14 @@ void PacketManager::manage_packets(ThreadGlobals& globals) {
 
   pkt.reset();
   while (true) {
-    gettimeofday(&ts, NULL);
     bool flag = read_packet(&pkt, true, &client);
     if (!flag)
       break;
-    //print_packet(&pkt);
     status = process_packet(&pkt, globals, responses);
     if (!write_packets(responses, &client) || !status) {
       // close client on write failure or status failure
       close_client();
       return;
-    }
-    gettimeofday(&te, NULL);
-    // TODO: delete it!!!!!!!!!!!!!!!!!!
-    if (te.tv_usec - ts.tv_usec > 500) {
-      printf("manage_packet took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
     }
     pkt.reset();
   }
