@@ -233,7 +233,8 @@ public:
     rows_change = sqlite3_changes(db);
     gettimeofday(&te, NULL);
     // TODO: delete it!!!!!!!!!!!!!!!!!!
-    printf("took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
+    if (te.tv_usec - ts.tv_usec > 500)
+      printf("Exec prep stmt took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
     return 0;
   }
 

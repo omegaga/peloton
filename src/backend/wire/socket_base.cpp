@@ -157,7 +157,9 @@ bool SocketManager<B>::read_bytes(B &pkt_buf, size_t bytes) {
         return false;
       }
       gettimeofday(&te, NULL);
-    printf("wait took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
+
+      if (te.tv_usec - ts.tv_usec > 1000)
+        printf("wait took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
     }
   }
 

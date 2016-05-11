@@ -64,10 +64,10 @@ public class PelotonTest {
    */
   public void Init() throws SQLException {
     conn.setAutoCommit(true);
-    //Statement stmt = conn.createStatement();
-    //stmt.execute(DROP);
-    //stmt.execute(DDL);
-    //System.out.println("Test db created.");
+    Statement stmt = conn.createStatement();
+    stmt.execute(DROP);
+    stmt.execute(DDL);
+    System.out.println("Test db created.");
   }
 
   /**
@@ -262,14 +262,14 @@ public class PelotonTest {
     PelotonTest pt = new PelotonTest();
     pt.Init();
     //pt.Insert(3, TABLE.A);
-    //pt.Insert(20);
+    pt.Insert(20);
     //pt.ReadModifyWrite(3);
     //pt.BitmapScan(2, 5);
-    //pt.SeqScan();
+    pt.SeqScan();
     //pt.DeleteByIndexScan(3);
     //pt.SeqScan();
     //pt.UpdateBySeqScan();
-    pt.IndexScan(3);
+    // pt.IndexScan(3);
     pt.Close();
   }
 }

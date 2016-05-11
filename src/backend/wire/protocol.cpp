@@ -29,27 +29,28 @@ const std::unordered_map<std::string, std::string> PacketManager::parameter_stat
   ("TimeZone", "US/Eastern");
 
 void print_packet(Packet* pkt UNUSED) {
-  //if (pkt->msg_type) {
-    //LOG_INFO("MsgType: %d", pkt->msg_type);
-  //}
+  // TODO: DELETE
+  if (pkt->msg_type) {
+    printf("MsgType: %d (%c)", pkt->msg_type, pkt->msg_type);
+  }
 
-  //LOG_INFO("Len: %zu", pkt->len);
+  printf("Len: %zu", pkt->len);
 
-  //LOG_INFO("BufLen: %zu", pkt->buf.size());
+  printf("BufLen: %zu", pkt->buf.size());
 
-  //LOG_INFO("{");
-  //for (auto ele : pkt->buf) {
-    //LOG_INFO("%d,", ele);
-  //}
-  //LOG_INFO("}\n");
+  printf("{");
+  for (auto ele UNUSED : pkt->buf) {
+    printf("%d (%c), ", ele, ele);
+  }
+  printf("}\n");
 }
 
 void print_uchar_vector(std::vector<uchar>& vec UNUSED) {
-  //LOG_INFO("{");
-  //for (auto ele : vec) {
-    //LOG_INFO("%d (%c)", ele, ele);
-  //}
-  //LOG_INFO("}\n");
+  //  LOG_INFO("{");
+  //  for (auto ele : vec) {
+  //    LOG_INFO("%d (%c)", ele, ele);
+  //  }
+  //  LOG_INFO("}\n");
 }
 
 /*
@@ -294,10 +295,12 @@ void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
     skipped_query_type_ = std::move(query_type);
     LOG_INFO("Statement skipped");
     std::unique_ptr<Packet> response(new Packet());
-    // Send Parse complete response
-    response->msg_type = '1';
-    responses.push_back(std::move(response));
-    return;
+  } else {
+    bool is_failed = db.PrepareStmt(query.c_str(), &stmt, err_msg);
+    if (is_failed) {
+      send_error_response({{'M', err_msg}}, responses);
+      send_ready_for_query(txn_state, responses);
+    }
   }
 
   // Read number of params
@@ -312,11 +315,6 @@ void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
   }
 
   // Prepare statement
-  bool is_failed = db.PrepareStmt(query.c_str(), &stmt, err_msg);
-  if (is_failed) {
-    send_error_response({{'M', err_msg}}, responses);
-    send_ready_for_query(txn_state, responses);
-  }
   std::shared_ptr<CacheEntry> entry(new CacheEntry());
   entry->stmt_name = prep_stmt_name;
   entry->query_string = std::move(query);
@@ -332,7 +330,6 @@ void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
   }
 
   std::unique_ptr<Packet> response(new Packet());
-
   // Send Parse complete response
   response->msg_type = '1';
   responses.push_back(std::move(response));
@@ -392,6 +389,11 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
   stmt = entry->sql_stmt;
   const auto &query_string = entry->query_string;
   const auto &query_type = entry->query_type;
+
+  // TODO: delete
+  //  if (prep_stmt_name.compare("S_3") == 0 || prep_stmt_name.compare("S_1") == 0){
+  //    printf("Stmt: %s\n", query_string.c_str());
+  //  }
 
   skipped_stmt_ = false;
   if (!hardcoded_execute_filter(query_type)) {
@@ -573,8 +575,11 @@ void PacketManager::exec_execute_message(Packet *pkt,
   struct timeval te;
   gettimeofday(&te, NULL);
   // TODO: delete it!!!!!!!!!!!!!!!!!!
-  printf("took %lu %lu\n", te.tv_sec - portal->ts.tv_sec, te.tv_usec - portal->ts.tv_usec);
-  printf("time now %lu %lu\n", te.tv_sec, te.tv_usec);
+  if (te.tv_usec - portal->ts.tv_usec > 500) {
+    printf("execute msg took %lu %lu (%s)\n", te.tv_sec - portal->ts.tv_sec,
+           te.tv_usec - portal->ts.tv_usec, portal->query_string.c_str());
+  }
+  // printf("time now %lu %lu\n", te.tv_sec, te.tv_usec);
 }
 
 /*
@@ -615,7 +620,8 @@ bool PacketManager::process_packet(Packet* pkt, ThreadGlobals& globals, Response
   }
   gettimeofday(&te, NULL);
   // TODO: delete it!!!!!!!!!!!!!!!!!!
-  printf("%c took %lu %lu\n", pkt->msg_type, te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
+  if (te.tv_usec - ts.tv_usec > 500)
+    printf("%c took %lu %lu\n", pkt->msg_type, te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
   return true;
 }
 
@@ -688,10 +694,12 @@ void PacketManager::manage_packets(ThreadGlobals& globals) {
       close_client();
       return;
     }
-    pkt.reset();
     gettimeofday(&te, NULL);
     // TODO: delete it!!!!!!!!!!!!!!!!!!
-    printf("manage_packet took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
+    if (te.tv_usec - ts.tv_usec > 500) {
+      printf("manage_packet took %lu %lu\n", te.tv_sec - ts.tv_sec, te.tv_usec - ts.tv_usec);
+    }
+    pkt.reset();
   }
 }
 }
